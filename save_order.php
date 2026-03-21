@@ -103,8 +103,14 @@ try {
     /* -----------------------------
        INSERT ORDER ITEMS
     ------------------------------ */
-    $item_sql = "INSERT INTO order_items (order_id, product_id, quantity, unit_price, line_total)
-                 VALUES (?, ?, ?, ?, ?)";
+    $item_sql = "INSERT INTO order_items (
+                    order_id,
+                    product_id,
+                    custom_item_name,
+                    quantity,
+                    unit_price,
+                    line_total
+                 ) VALUES (?, ?, ?, ?, ?, ?)";
 
     $item_stmt = $conn->prepare($item_sql);
     if (!$item_stmt) {
@@ -112,12 +118,27 @@ try {
     }
 
     foreach ($_SESSION["cart"] as $item) {
-        $product_id = (int) $item["product_id"];
+        $product_id = isset($item["product_id"]) && $item["product_id"] !== null
+            ? (int)$item["product_id"]
+            : null;
+
+        $custom_item_name = isset($item["custom_item_name"]) && $item["custom_item_name"] !== ""
+            ? trim($item["custom_item_name"])
+            : null;
+
         $qty = (int) $item["quantity"];
         $price = (float) $item["price"];
         $line_total = $qty * $price;
 
-        $item_stmt->bind_param("iiidd", $order_id, $product_id, $qty, $price, $line_total);
+        $item_stmt->bind_param(
+            "iisidd",
+            $order_id,
+            $product_id,
+            $custom_item_name,
+            $qty,
+            $price,
+            $line_total
+        );
 
         if (!$item_stmt->execute()) {
             throw new Exception("Order item insert failed: " . $item_stmt->error);

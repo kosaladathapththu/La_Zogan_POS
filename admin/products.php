@@ -1,179 +1,458 @@
 <?php
-include '../includes/auth.php';
+session_start();
 include '../db.php';
 
-/* ADD PRODUCT */
+if (!isset($_SESSION["user_id"]) || $_SESSION["role"] != "admin") {
+    header("Location: ../login.php"); exit;
+}
+
+$msg = ""; $msg_type = "";
+
+/* ── ADD PRODUCT ── */
 if (isset($_POST['add_product'])) {
-    $category_name = trim($_POST['category_name']);
-    $product_name = trim($_POST['product_name']);
-    $price = (float) $_POST['price'];
+    $cat_name  = trim($conn->real_escape_string($_POST['category_name']));
+    $prod_name = trim($conn->real_escape_string($_POST['product_name']));
+    $price     = (float) $_POST['price'];
+    $status    = (int)($_POST['status'] ?? 1);
 
-    if ($category_name != "" && $product_name != "" && $price > 0) {
-
-        // Check if category already exists
-        $category_name_safe = mysqli_real_escape_string($conn, $category_name);
-        $product_name_safe = mysqli_real_escape_string($conn, $product_name);
-
-        $checkCategory = $conn->query("SELECT category_id FROM categories WHERE category_name = '$category_name_safe' LIMIT 1");
-
-        if ($checkCategory->num_rows > 0) {
-            $cat = $checkCategory->fetch_assoc();
-            $category_id = $cat['category_id'];
+    if ($cat_name !== "" && $prod_name !== "" && $price > 0) {
+        /* Find or create category */
+        $cat_q = $conn->query("SELECT category_id FROM categories WHERE category_name='$cat_name' LIMIT 1");
+        if ($cat_q->num_rows > 0) {
+            $category_id = $cat_q->fetch_assoc()['category_id'];
         } else {
-            // Insert new category
-            $conn->query("INSERT INTO categories (category_name, status) VALUES ('$category_name_safe', 1)");
+            $conn->query("INSERT INTO categories (category_name, status) VALUES ('$cat_name', 1)");
             $category_id = $conn->insert_id;
         }
-
-        // Insert product
-        $sql = "INSERT INTO products (category_id, product_name, price, status)
-                VALUES ($category_id, '$product_name_safe', $price, 1)";
-        $conn->query($sql);
+        $conn->query("INSERT INTO products (category_id, product_name, price, status) VALUES ($category_id, '$prod_name', $price, $status)");
+        $msg = "Product added successfully."; $msg_type = "success";
+    } else {
+        $msg = "Please fill all fields correctly."; $msg_type = "error";
     }
-
-    header("Location: products.php");
-    exit;
 }
 
-/* DELETE PRODUCT */
+/* ── EDIT PRODUCT ── */
+if (isset($_POST['edit_product'])) {
+    $id        = (int)$_POST['edit_id'];
+    $cat_name  = trim($conn->real_escape_string($_POST['category_name']));
+    $prod_name = trim($conn->real_escape_string($_POST['product_name']));
+    $price     = (float)$_POST['price'];
+    $status    = (int)($_POST['status'] ?? 1);
+
+    if ($cat_name !== "" && $prod_name !== "" && $price > 0) {
+        $cat_q = $conn->query("SELECT category_id FROM categories WHERE category_name='$cat_name' LIMIT 1");
+        if ($cat_q->num_rows > 0) {
+            $category_id = $cat_q->fetch_assoc()['category_id'];
+        } else {
+            $conn->query("INSERT INTO categories (category_name, status) VALUES ('$cat_name', 1)");
+            $category_id = $conn->insert_id;
+        }
+        $conn->query("UPDATE products SET category_id=$category_id, product_name='$prod_name', price=$price, status=$status WHERE product_id=$id");
+        $msg = "Product updated."; $msg_type = "success";
+    }
+}
+
+/* ── DELETE ── */
 if (isset($_GET['delete'])) {
-    $product_id = (int) $_GET['delete'];
-    $conn->query("DELETE FROM products WHERE product_id = $product_id");
-    header("Location: products.php");
-    exit;
+    $id = (int)$_GET['delete'];
+    $conn->query("DELETE FROM products WHERE product_id=$id");
+    $msg = "Product deleted."; $msg_type = "warning";
 }
+
+/* ── TOGGLE STATUS ── */
+if (isset($_GET['toggle'])) {
+    $id = (int)$_GET['toggle'];
+    $conn->query("UPDATE products SET status=IF(status=1,0,1) WHERE product_id=$id");
+    header("Location: products.php"); exit;
+}
+
+/* ── EDIT ROW ── */
+$edit_row = null;
+if (isset($_GET['edit'])) {
+    $eid = (int)$_GET['edit'];
+    $edit_row = $conn->query("
+        SELECT p.*, c.category_name
+        FROM products p
+        JOIN categories c ON p.category_id = c.category_id
+        WHERE p.product_id = $eid
+    ")->fetch_assoc();
+}
+
+/* ── SEARCH / FILTER ── */
+$search      = trim($_GET['search'] ?? '');
+$filter_cat  = (int)($_GET['cat'] ?? 0);
+$filter_stat = $_GET['stat'] ?? '';
+
+$where = ["1=1"];
+if ($search)      $where[] = "p.product_name LIKE '%" . $conn->real_escape_string($search) . "%'";
+if ($filter_cat)  $where[] = "p.category_id = $filter_cat";
+if ($filter_stat !== '') $where[] = "p.status = " . (int)$filter_stat;
+$ws = implode(" AND ", $where);
 
 $products = $conn->query("
     SELECT p.*, c.category_name
     FROM products p
     JOIN categories c ON p.category_id = c.category_id
+    WHERE $ws
     ORDER BY p.product_id DESC
 ");
+
+$categories = $conn->query("SELECT * FROM categories WHERE status=1 ORDER BY category_name ASC");
+
+/* Counts */
+$total_active   = $conn->query("SELECT COUNT(*) AS v FROM products WHERE status=1")->fetch_assoc()['v'];
+$total_inactive = $conn->query("SELECT COUNT(*) AS v FROM products WHERE status=0")->fetch_assoc()['v'];
+$total_all      = $total_active + $total_inactive;
 ?>
-
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Manage Products</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f6f9;
-            margin: 0;
-            padding: 20px;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Products — The La-zogan</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Lora:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<style>
+<?php include 'shared_style.php'; ?>
 
-        .container {
-            max-width: 1100px;
-            margin: auto;
-        }
+/* ── Page-specific extras ── */
+.stat-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 18px;
+}
 
-        .card {
-            background: #fff;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            box-shadow: 0 0 8px rgba(0,0,0,0.08);
-        }
+.stat-tile {
+    background: var(--white);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    display: flex; align-items: center; gap: 12px;
+    box-shadow: var(--shadow-sm);
+}
 
-        h1, h2 {
-            margin-top: 0;
-        }
+.st-icon {
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; flex-shrink: 0;
+}
 
-        form {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr auto;
-            gap: 10px;
-            align-items: center;
-        }
+.st-val { font-size: 20px; font-weight: 900; font-family: 'Lora', serif; color: var(--text); }
+.st-lbl { font-size: 11px; font-weight: 700; color: var(--text-muted); }
 
-        input, button {
-            padding: 10px;
-            font-size: 14px;
-        }
+/* Filter bar */
+.filter-bar {
+    background: var(--white);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 13px 16px;
+    margin-bottom: 14px;
+    display: flex; flex-wrap: wrap; gap: 9px; align-items: flex-end;
+    box-shadow: var(--shadow-sm);
+}
 
-        button {
-            background: #1e88e5;
-            color: white;
-            border: none;
-            cursor: pointer;
-            border-radius: 5px;
-        }
+.ff { display: flex; flex-direction: column; gap: 3px; }
+.ff label { font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .09em; color: var(--text-muted); }
+.ff input, .ff select {
+    background: var(--bg); border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm); padding: 7px 11px;
+    font-size: 13px; font-family: 'Nunito', sans-serif; font-weight: 700;
+    color: var(--text); outline: none; min-width: 130px;
+    transition: border-color .15s;
+}
+.ff input:focus, .ff select:focus { border-color: var(--primary); }
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
+/* Price badge */
+.price-badge {
+    display: inline-block;
+    background: var(--primary-lt);
+    color: var(--primary);
+    border: 1px solid #f9c4a6;
+    border-radius: 6px;
+    padding: 3px 9px;
+    font-size: 13px;
+    font-weight: 900;
+}
 
-        table th, table td {
-            padding: 12px;
-            border-bottom: 1px solid #ddd;
-            text-align: left;
-        }
+/* Category chip */
+.cat-chip {
+    display: inline-block;
+    background: var(--indigo-lt);
+    color: var(--indigo);
+    border: 1px solid #c7d2fe;
+    border-radius: 40px;
+    padding: 2px 9px;
+    font-size: 11px;
+    font-weight: 800;
+}
 
-        .delete-btn {
-            color: red;
-            text-decoration: none;
-        }
-
-        .top-links a {
-            margin-right: 15px;
-            text-decoration: none;
-        }
-    </style>
+/* Sticky form card */
+.form-sticky { position: sticky; top: calc(var(--topbar-h) + 16px); }
+</style>
 </head>
 <body>
-<div class="container">
 
-    <div class="top-links">
-        <a href="../dashboard.php">Dashboard</a>
-        <a href="sales.php">Sales</a>
-        <a href="../logout.php">Logout</a>
+<?php include 'shared_nav.php'; ?>
+
+<div class="main">
+<?php include 'shared_topbar.php'; ?>
+
+<div class="content">
+
+    <!-- Page header -->
+    <div class="page-header">
+        <div>
+            <h2 class="page-title-h"><i class="fa-solid fa-bowl-food"></i> Products</h2>
+            <p class="page-sub">Add, edit and manage your menu products</p>
+        </div>
     </div>
 
-    <div class="card">
-        <h1>Manage Products</h1>
+    <!-- Alert -->
+    <?php if ($msg): ?>
+    <div class="alert alert-<?php echo $msg_type; ?>">
+        <i class="fa-solid <?php echo $msg_type=='success'?'fa-circle-check':($msg_type=='warning'?'fa-triangle-exclamation':'fa-circle-exclamation'); ?>"></i>
+        <?php echo htmlspecialchars($msg); ?>
+    </div>
+    <?php endif; ?>
 
-        <form method="POST">
-            <input type="text" name="category_name" placeholder="Enter Category" required>
-            <input type="text" name="product_name" placeholder="Product Name" required>
-            <input type="number" step="0.01" name="price" placeholder="Price" required>
-            <button type="submit" name="add_product">Add Product</button>
-        </form>
+    <!-- Stat strip -->
+    <div class="stat-strip">
+        <div class="stat-tile">
+            <div class="st-icon" style="background:var(--primary-lt);color:var(--primary);"><i class="fa-solid fa-bowl-food"></i></div>
+            <div><div class="st-val"><?php echo $total_all; ?></div><div class="st-lbl">Total Products</div></div>
+        </div>
+        <div class="stat-tile">
+            <div class="st-icon" style="background:var(--green-lt);color:var(--green);"><i class="fa-solid fa-circle-check"></i></div>
+            <div><div class="st-val"><?php echo $total_active; ?></div><div class="st-lbl">Active</div></div>
+        </div>
+        <div class="stat-tile">
+            <div class="st-icon" style="background:var(--bg);color:var(--text-muted);"><i class="fa-solid fa-circle-xmark"></i></div>
+            <div><div class="st-val"><?php echo $total_inactive; ?></div><div class="st-lbl">Inactive</div></div>
+        </div>
     </div>
 
-    <div class="card">
-        <h2>Product List</h2>
+    <!-- Main 2-col layout -->
+    <div class="two-col" style="align-items: start;">
 
-        <table>
-            <tr>
-                <th>ID</th>
-                <th>Category</th>
-                <th>Product</th>
-                <th>Price</th>
-                <th>Status</th>
-                <th>Action</th>
-            </tr>
+        <!-- ═══ FORM PANEL ═══ -->
+        <div class="card form-card form-sticky">
+            <div class="card-head">
+                <h4>
+                    <i class="fa-solid <?php echo $edit_row ? 'fa-pen' : 'fa-plus-circle'; ?>"></i>
+                    <?php echo $edit_row ? 'Edit Product' : 'Add New Product'; ?>
+                </h4>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    <?php if ($edit_row): ?>
+                        <input type="hidden" name="edit_id" value="<?php echo $edit_row['product_id']; ?>">
+                    <?php endif; ?>
 
-            <?php while ($row = $products->fetch_assoc()) { ?>
-                <tr>
-                    <td><?php echo $row['product_id']; ?></td>
-                    <td><?php echo $row['category_name']; ?></td>
-                    <td><?php echo $row['product_name']; ?></td>
-                    <td>Rs. <?php echo number_format($row['price'], 2); ?></td>
-                    <td><?php echo $row['status'] ? 'Active' : 'Inactive'; ?></td>
-                    <td>
-                        <a class="delete-btn"
-                           href="products.php?delete=<?php echo $row['product_id']; ?>"
-                           onclick="return confirm('Delete this product?')">
-                           Delete
+                    <!-- Category -->
+                    <div class="field">
+                        <label>Category</label>
+                        <div class="inp-wrap">
+                            <i class="fa-solid fa-tag"></i>
+                            <input
+                                type="text"
+                                name="category_name"
+                                class="inp"
+                                list="cat_list"
+                                placeholder="Type or pick a category"
+                                value="<?php echo htmlspecialchars($edit_row['category_name'] ?? ''); ?>"
+                                required
+                                autocomplete="off"
+                            >
+                        </div>
+                        <datalist id="cat_list">
+                            <?php
+                            if ($categories && $categories->num_rows > 0) {
+                                mysqli_data_seek($categories, 0);
+                                while ($c = $categories->fetch_assoc()) {
+                                    echo '<option value="' . htmlspecialchars($c['category_name']) . '">';
+                                }
+                            }
+                            ?>
+                        </datalist>
+                        <div style="font-size:11px;color:var(--text-muted);font-weight:700;margin-top:4px;">
+                            <i class="fa-solid fa-circle-info"></i> Type a new name to create a category automatically.
+                        </div>
+                    </div>
+
+                    <!-- Product Name -->
+                    <div class="field">
+                        <label>Product Name</label>
+                        <div class="inp-wrap">
+                            <i class="fa-solid fa-utensils"></i>
+                            <input
+                                type="text"
+                                name="product_name"
+                                class="inp"
+                                placeholder="e.g. Chicken Fried Rice"
+                                value="<?php echo htmlspecialchars($edit_row['product_name'] ?? ''); ?>"
+                                required
+                            >
+                        </div>
+                    </div>
+
+                    <!-- Price -->
+                    <div class="field">
+                        <label>Price (Rs.)</label>
+                        <div class="inp-wrap">
+                            <i class="fa-solid fa-coins"></i>
+                            <input
+                                type="number"
+                                name="price"
+                                class="inp"
+                                step="0.01"
+                                min="0.01"
+                                placeholder="0.00"
+                                value="<?php echo $edit_row ? number_format($edit_row['price'], 2, '.', '') : ''; ?>"
+                                required
+                            >
+                        </div>
+                    </div>
+
+                    <!-- Status -->
+                    <div class="field">
+                        <label>Status</label>
+                        <select name="status" class="inp" style="padding-left:14px;">
+                            <option value="1" <?php echo (!$edit_row || $edit_row['status']==1) ? 'selected' : ''; ?>>
+                                Active (visible on POS)
+                            </option>
+                            <option value="0" <?php echo ($edit_row && $edit_row['status']==0) ? 'selected' : ''; ?>>
+                                Inactive (hidden from POS)
+                            </option>
+                        </select>
+                    </div>
+
+                    <!-- Buttons -->
+                    <?php if ($edit_row): ?>
+                        <button type="submit" name="edit_product" class="btn-primary" style="width:100%;">
+                            <i class="fa-solid fa-save"></i> Update Product
+                        </button>
+                        <a href="products.php" class="btn-secondary" style="width:100%;justify-content:center;margin-top:8px;">
+                            <i class="fa-solid fa-xmark"></i> Cancel Edit
                         </a>
-                    </td>
-                </tr>
-            <?php } ?>
-        </table>
-    </div>
+                    <?php else: ?>
+                        <button type="submit" name="add_product" class="btn-primary" style="width:100%;">
+                            <i class="fa-solid fa-plus"></i> Add Product
+                        </button>
+                    <?php endif; ?>
+                </form>
+            </div>
+        </div>
 
-</div>
+        <!-- ═══ TABLE PANEL ═══ -->
+        <div style="display:flex;flex-direction:column;gap:12px;">
+
+            <!-- Filter bar -->
+            <form method="GET" class="filter-bar">
+                <div class="ff">
+                    <label>Search</label>
+                    <input type="text" name="search" placeholder="Product name…" value="<?php echo htmlspecialchars($search); ?>">
+                </div>
+                <div class="ff">
+                    <label>Category</label>
+                    <select name="cat">
+                        <option value="">All Categories</option>
+                        <?php
+                        $cat_filter_q = $conn->query("SELECT * FROM categories ORDER BY category_name ASC");
+                        while ($c = $cat_filter_q->fetch_assoc()) {
+                            $sel = $filter_cat == $c['category_id'] ? 'selected' : '';
+                            echo "<option value='{$c['category_id']}' $sel>" . htmlspecialchars($c['category_name']) . "</option>";
+                        }
+                        ?>
+                    </select>
+                </div>
+                <div class="ff">
+                    <label>Status</label>
+                    <select name="stat">
+                        <option value="">All</option>
+                        <option value="1" <?php echo $filter_stat==='1'?'selected':''; ?>>Active</option>
+                        <option value="0" <?php echo $filter_stat==='0'?'selected':''; ?>>Inactive</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn-primary" style="align-self:flex-end;">
+                    <i class="fa-solid fa-magnifying-glass"></i> Filter
+                </button>
+                <a href="products.php" class="btn-secondary" style="align-self:flex-end;">
+                    <i class="fa-solid fa-rotate"></i> Reset
+                </a>
+            </form>
+
+            <!-- Product Table -->
+            <div class="card table-card-full">
+                <div class="card-head">
+                    <h4><i class="fa-solid fa-list"></i> Product List</h4>
+                    <span class="count-badge"><?php echo $products ? $products->num_rows : 0; ?> found</span>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Category</th>
+                            <th>Product Name</th>
+                            <th>Price</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php if ($products && $products->num_rows > 0):
+                            while ($row = $products->fetch_assoc()): ?>
+                        <tr>
+                            <td style="color:var(--text-muted);font-size:12px;"><?php echo $row['product_id']; ?></td>
+                            <td><span class="cat-chip"><?php echo htmlspecialchars($row['category_name']); ?></span></td>
+                            <td>
+                                <div style="display:flex;align-items:center;gap:8px;">
+                                    <div style="width:30px;height:30px;border-radius:8px;background:var(--primary-lt);border:1.5px solid #f9c4a6;display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--primary);flex-shrink:0;">
+                                        <i class="fa-solid fa-plate-wheat"></i>
+                                    </div>
+                                    <strong><?php echo htmlspecialchars($row['product_name']); ?></strong>
+                                </div>
+                            </td>
+                            <td><span class="price-badge">Rs. <?php echo number_format($row['price'], 2); ?></span></td>
+                            <td>
+                                <a href="products.php?toggle=<?php echo $row['product_id']; ?>"
+                                   class="status-badge <?php echo $row['status'] ? 'st-active' : 'st-inactive'; ?>">
+                                    <i class="fa-solid <?php echo $row['status'] ? 'fa-circle-check' : 'fa-circle-xmark'; ?>"></i>
+                                    <?php echo $row['status'] ? 'Active' : 'Inactive'; ?>
+                                </a>
+                            </td>
+                            <td>
+                                <div class="action-btns">
+                                    <a href="products.php?edit=<?php echo $row['product_id']; ?>"
+                                       class="btn-edit">
+                                        <i class="fa-solid fa-pen"></i> Edit
+                                    </a>
+                                    <a href="products.php?delete=<?php echo $row['product_id']; ?>"
+                                       class="btn-del"
+                                       onclick="return confirm('Delete \'<?php echo addslashes($row['product_name']); ?>\'?')">
+                                        <i class="fa-solid fa-trash"></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        <?php endwhile; else: ?>
+                        <tr>
+                            <td colspan="6" class="empty-row">
+                                <i class="fa-solid fa-bowl-food" style="font-size:22px;color:var(--border-dk);display:block;margin-bottom:8px;"></i>
+                                No products found. Try adjusting your filters.
+                            </td>
+                        </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+
+        </div>
+    </div><!-- /two-col -->
+
+</div><!-- /content -->
+</div><!-- /main -->
+
 </body>
 </html>
