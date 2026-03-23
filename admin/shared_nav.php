@@ -23,6 +23,14 @@ $current = basename($_SERVER['PHP_SELF']);
         <a class="nav-item <?php echo $current=='orders.php'?'active':''; ?>" href="orders.php">
             <i class="fa-solid fa-receipt"></i> All Orders
         </a>
+        <a class="nav-item <?php echo $current=='expense_report.php'?'active':''; ?>" href="expense_report.php">
+            <i class="fa-solid fa-chart-pie"></i> Expense Report
+        </a>
+
+        <div class="nav-group-label">Finance</div>
+        <a class="nav-item <?php echo $current=='expenses.php'?'active':''; ?>" href="expenses.php">
+            <i class="fa-solid fa-money-bill-trend-up"></i> Expenses
+        </a>
 
         <div class="nav-group-label">Management</div>
         <a class="nav-item <?php echo $current=='products.php'?'active':''; ?>" href="products.php">

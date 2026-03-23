@@ -138,7 +138,7 @@ while ($row = $items->fetch_assoc()) {
       <?php if (!$item['product_id']): ?><span class="cust-chip">Custom</span><?php endif; ?>
     </td>
     <td style="text-align:center;font-weight:800;"><?php echo (int)$item['quantity']; ?></td>
-    <td style="text-align:right;">Rs. <?php echo number_format($item['unit_price'],2); ?></td>
+    <td style="text-align:right;">Rs. <?php echo number_format($item['price'],2); ?></td>
     <td style="text-align:right;font-weight:800;color:#d95c2b;">Rs. <?php echo number_format($item['line_total'],2); ?></td>
   </tr>
   <?php endforeach; else: ?>
